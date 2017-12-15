@@ -21,9 +21,9 @@ class DataCleaner:
   """
   def __init__(self):
     # load locales
-    self.localeIdMap = defaultdict(int)
-    for i, l in enumerate(locale.locale_alias.keys()):
-      self.localeIdMap[l] = i + 1
+   # self.localeIdMap = defaultdict(int)
+    #for i, l in enumerate(locale.locale_alias.keys()):
+    #  self.localeIdMap[l] = i + 1
     # load countries
     #self.countryIdMap = defaultdict(int)
    # ctryIdx = defaultdict(int)
@@ -76,10 +76,15 @@ class DataCleaner:
       return int(hashlib.sha224(value).hexdigest()[0:4], 16)
 
   def getFloatValue(self, value):
+    print value, "val"
     if len(value.strip()) == 0:
+
       return 0.0
     else:
-      return float(value)
+      print "else"
+      return np.float(value)
+    print value, "val"
+
 
 
 
@@ -95,8 +100,9 @@ class Events:
     print 
     nevents = len(programEntities.eventIndex.keys())
     print nevents
-    self.eventPropMatrix = ss.dok_matrix((nevents, 7))
-    self.eventContMatrix = ss.dok_matrix((nevents, 100))
+    w, h = nevents, 100;
+    self.eventPropMatrix = [[0 for x in range(w)] for y in range(h)] 
+    self.eventContMatrix = [[0 for x in range(w)] for y in range(h)] 
     ln = 0
     for line in fin.readlines():
       if ln > 10:
@@ -108,13 +114,15 @@ class Events:
       i = eventId
       print i, "yti"
       print cols
-      self.eventPropMatrix[i, 0] = cleaner.getJoinedYearMonth(cols[2]) # start_time
-      self.eventPropMatrix[i, 1] = cleaner.getFeatureHash(cols[3]) # city
-      self.eventPropMatrix[i, 2] = cleaner.getFeatureHash(cols[4]) # state
-      self.eventPropMatrix[i, 3] = cleaner.getFeatureHash(cols[5]) # zip
-      self.eventPropMatrix[i, 4] = cleaner.getFeatureHash(cols[6]) # country
-      self.eventPropMatrix[i, 5] = cleaner.getFloatValue(cols[7]) # lat
-      self.eventPropMatrix[i, 6] = cleaner.getFloatValue(cols[8]) # lon
+      self.eventPropMatrix[i, 0] = int(cols[10].strip()) # start_time
+      print "why??"
+      self.eventPropMatrix[i, 1] = int(cols[11].strip()) # city
+      self.eventPropMatrix[i, 2] = int(cols[12].strip()) # state
+      self.eventPropMatrix[i, 3] = int(cols[13].strip()) # zip
+      self.eventPropMatrix[i, 7] = int(cols[14].strip()) # zip
+      self.eventPropMatrix[i, 4] = int(cols[6].strip()) # zip
+      self.eventPropMatrix[i, 5] = cleaner.getFeatureHash(cols[7]) # degreeType
+      self.eventPropMatrix[i, 6] = cleaner.getJoinedYearMonth(cols[8]) # lon
       for j in range(9, 109):
         self.eventContMatrix[i, j-9] = cols[j]
       print self.eventContMatrix, "mst"
@@ -202,8 +210,9 @@ class ProgramEntities:
       if counter == 20: break
       for event2 in uniqueEvents:
         if event != event2:
-          events = [event, event2]
-          self.uniqueEventPairs.update(itertools.combinations(events, 2))
+          events = (event, event2)
+          if (event2, event) not in self.uniqueEventPairs:
+            self.uniqueEventPairs.add(events)
    # cPickle.dump(self.userIndex, open("../Models/PE_userIndex.pkl", 'wb'))
     cPickle.dump(self.eventIndex, open("dumm.pkl", 'wb'))
 
