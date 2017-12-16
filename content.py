@@ -6,10 +6,17 @@ import datetime
 import hashlib
 import locale
 import numpy as np
-#import pycountry
+import pandas as pd
 import scipy.io as sio
 import scipy.sparse as ss
+from scipy.sparse.linalg import svds
 import scipy.spatial.distance as ssd
+#from surprise import *
+from sklearn import cross_validation as cv
+import sklearn.metrics.pairwise as pw
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import average_precision_score
+from math import sqrt
 
 from collections import defaultdict
 from sklearn.preprocessing import normalize
@@ -20,54 +27,12 @@ class DataCleaner:
   or number buckets.
   """
   def __init__(self):
-    # load locales
-   # self.localeIdMap = defaultdict(int)
-    #for i, l in enumerate(locale.locale_alias.keys()):
-    #  self.localeIdMap[l] = i + 1
-    # load countries
-    #self.countryIdMap = defaultdict(int)
-   # ctryIdx = defaultdict(int)
-   # for i, c in enumerate(pycountry.countries):
-    #  self.countryIdMap[c.name.lower()] = i + 1
-    #  if c.name.lower() == "usa":
-     #   ctryIdx["US"] = i
-     # if c.name.lower() == "canada":
-      #  ctryIdx["CA"] = i
-    #for cc in ctryIdx.keys():
-     # for s in pycountry.subdivisions.get(country_code=cc):
-      #  self.countryIdMap[s.name.lower()] = ctryIdx[cc] + 1
-    # load gender id map
-    self.genderIdMap = defaultdict(int, {"male":1, "female":2})
+    self.listMap = []
 
-  def getLocaleId(self, locstr):
-    return self.localeIdMap[locstr.lower()]
-
-  def getGenderId(self, genderStr):
-    return self.genderIdMap[genderStr]
 
   def getJoinedYearMonth(self, dateString):
     dttm = datetime.datetime.strptime(dateString, "%Y-%m-%dT%H:%M:%S.%fZ")
     return "".join([str(dttm.year), str(dttm.month)])
-
-  def getCountryId(self, location):
-    if (isinstance(location, str)
-        and len(location.strip()) > 0
-        and location.rfind("  ") > -1):
-      return self.countryIdMap[location[location.rindex("  ") + 2:].lower()]
-    else:
-      return 0
-
-  def getBirthYearInt(self, birthYear):
-    try:
-      return 0 if birthYear == "None" else int(birthYear)
-    except:
-      return 0
-
-  def getTimezoneInt(self, timezone):
-    try:
-      return int(timezone)
-    except:
-      return 0
 
   def getFeatureHash(self, value):
     if len(value.strip()) == 0:
@@ -76,14 +41,14 @@ class DataCleaner:
       return int(hashlib.sha224(value).hexdigest()[0:4], 16)
 
   def getFloatValue(self, value):
-    print value, "val"
     if len(value.strip()) == 0:
 
       return 0.0
     else:
-      print "else"
-      return np.float(value)
-    print value, "val"
+      try:
+        return np.float(value)
+      except:
+        return 0.0
 
 
 
@@ -93,68 +58,132 @@ class Events:
   Builds the event-event similarity matrix and event content-content
   similarity matrix for program events.
   """
-  def __init__(self, programEntities, psim=ssd.correlation, csim=ssd.cosine):
+  def __init__(self, eventIndex, users, psim=ssd.correlation, csim=ssd.cosine):
     cleaner = DataCleaner()
     fin = open("users.tsv", 'rb')
     fin.readline() # skip header
-    print 
-    nevents = len(programEntities.eventIndex.keys())
-    print nevents
-    w, h = nevents, 100;
-    self.eventPropMatrix = [[0 for x in range(w)] for y in range(h)] 
-    self.eventContMatrix = [[0 for x in range(w)] for y in range(h)] 
+    nevents = len(eventIndex.keys())
+    self.eventPropMatrix = np.zeros((nevents, 8))
+    self.eventContMatrix = ss.dok_matrix((nevents, 100))
     ln = 0
     for line in fin.readlines():
-      if ln > 10:
-        break
-      cols = line.strip().split('\t')
+  #      if ln > 10:
+  #        break
+      cols = line.strip().split("\t")
       eventId = cols[0]
-      print eventId, "id"
-      print "ys"
-      i = eventId
-      print i, "yti"
-      print cols
-      self.eventPropMatrix[i, 0] = int(cols[10].strip()) # start_time
-      print "why??"
-      self.eventPropMatrix[i, 1] = int(cols[11].strip()) # city
-      self.eventPropMatrix[i, 2] = int(cols[12].strip()) # state
-      self.eventPropMatrix[i, 3] = int(cols[13].strip()) # zip
-      self.eventPropMatrix[i, 7] = int(cols[14].strip()) # zip
-      self.eventPropMatrix[i, 4] = int(cols[6].strip()) # zip
-      self.eventPropMatrix[i, 5] = cleaner.getFeatureHash(cols[7]) # degreeType
-      self.eventPropMatrix[i, 6] = cleaner.getJoinedYearMonth(cols[8]) # lon
-      for j in range(9, 109):
-        self.eventContMatrix[i, j-9] = cols[j]
-      print self.eventContMatrix, "mst"
-      print "oho"
-      ln += 1
+      if eventIndex.has_key(eventId):
+        i = eventIndex[eventId]
+        self.eventPropMatrix[i, 0] = cleaner.getFloatValue(cols[10]) # start_time
+        self.eventPropMatrix[i, 1] = cleaner.getFloatValue(cols[11]) # city
+        if len(cols[12].strip()) > 0:
+          if cols[12].strip() == "Yes": self.eventPropMatrix[i,2] = 1
+          else :self.eventPropMatrix[i,2] = 2
+        if len(cols[13].strip()) > 0:
+          if cols[13].strip() == "Yes": self.eventPropMatrix[i,3] = 1
+          else :self.eventPropMatrix[i,3] = 2
+        self.eventPropMatrix[i,7] = cleaner.getFloatValue(cols[14]) # zip
+        self.eventPropMatrix[i,4] = cleaner.getFloatValue(cols[6]) # zip
+        self.eventPropMatrix[i,5] = cleaner.getFeatureHash(cols[7]) # degreeType
+        self.eventPropMatrix[i,6] = cleaner.getFeatureHash(cols[8]) # 
+          #for j in range(9, 109):
+           # self.eventContMatrix[i, j-9] = cols[j]
+        ln += 1
     fin.close()
+    print "yeys"
     self.eventPropMatrix = normalize(self.eventPropMatrix,
-        norm="l1", axis=0, copy=False)
-    print self.eventPropMatrix, "matrix"
-    sio.mmwrite("eventProp1", self.eventPropMatrix)
+          norm="l1", axis=0, copy=False)
+      #sio.mmwrite("../Models/EV_eventPropMatrix", self.eventPropMatrix)
     self.eventContMatrix = normalize(self.eventContMatrix,
-        norm="l1", axis=0, copy=False)
-    sio.mmwrite("eventProp2", self.eventContMatrix)
-    # calculate similarity between event pairs based on the two matrices    
-    self.eventPropSim = ss.dok_matrix((nevents, nevents))
+          norm="l1", axis=0, copy=False)
+     # sio.mmwrite("../Models/EV_eventContMatrix", self.eventContMatrix)
+      # calculate similarity between event pairs based on the two matrices    
+    self.eventPropSim = np.zeros((nevents, nevents))
     self.eventContSim = ss.dok_matrix((nevents, nevents))
-    for e1, e2 in programEntities.uniqueEventPairs:
-      i = programEntities.eventIndex[e1]
-      j = programEntities.eventIndex[e2]
-      if not self.eventPropSim.has_key((i,j)):
-        epsim = psim(self.eventPropMatrix.getrow(i).todense(),
-          self.eventPropMatrix.getrow(j).todense())
-       # self.eventPropSim[i, j] = epsim
-      #  self.eventPropSim[j, i] = epsim
-      if not self.eventContSim.has_key((i,j)):
-        ecsim = csim(self.eventContMatrix.getrow(i).todense(),
-          self.eventContMatrix.getrow(j).todense())
+    print "yep"
+    counter = 0
+    for e1 in eventIndex.keys():
+      for e2 in eventIndex.keys():
+        if counter == 100000: break
+        counter +=1
+        i = eventIndex[e1]
+        j = eventIndex[e2]
+        #if not self.eventPropSim.has_key((i,j)):
+        epsim = csim(self.eventPropMatrix[i],
+            self.eventPropMatrix[j])
+        try:
+          float(epsim)
+        except: epsim = 0.0
+        self.eventPropSim[i, j] = epsim
+        self.eventPropSim[j, i] = epsim
 
-        self.eventContSim[i, j] = epsim
-        self.eventContSim[j, i] = epsim
-    sio.mmwrite("../Models/EV_eventPropSim", self.eventPropSim)
-    sio.mmwrite("../Models/EV_eventContSim", self.eventContSim)
+    print "chec"
+      #  if not self.eventContSim.has_key((i,j)):
+        #  ecsim = csim(self.eventContMatrix.getrow(i).todense(),
+         #   self.eventContMatrix.getrow(j).todense())
+          #self.eventContSim[i, j] = epsim
+         # self.eventContSim[j, i] = epsim
+    sio.mmwrite("eventProp1", self.eventPropSim)
+
+  def getVal(self):
+    print self.eventPropSim
+    return self.eventPropSim
+      #kmeans = KMeans(n_clusters = 12)
+     # kmeans.fit(self.eventPropMatrix)
+
+      #sio.mmwrite("../Models/EV_eventContSim", self.eventContSim)
+
+class DataRewriter:
+  def __init__(self, userSim, jobSim, jobIndex, eventIndex):
+    self.eventIndex = eventIndex
+    self.jobIndex = jobIndex
+    self.userJobMatrix = jobSim
+    self.eventPropSim = userSim
+
+  def rmse(self, prediction, ground_truth):
+    prediction = prediction[ground_truth.nonzero()].flatten()
+    #if prediction.max() != 0:
+     # prediction *= 1.0/prediction.max()
+            #lowValues = np.where(prediction<0)
+            #for v in lowValues:
+            #    prediction[v] = 0
+     # print('pred max =', prediction.max())
+    ground_truth = ground_truth[ground_truth.nonzero()].flatten()
+    print('in rmse')
+    print('pred', prediction)
+    print('gt', ground_truth)
+        #mse function(y_true, y_pred)! wrong way around in the sample code...
+        #returns sum of squared distances between correct and incorrect,
+        #divided by the total number of users
+    return sqrt(mean_squared_error(ground_truth, prediction))
+
+
+  def eventReco(self, n_users, train_data_matrix):
+    for userIndex in self.eventIndex.keys():
+      i = self.eventIndex[userIndex]
+      self.finalMatrix = np.zeros((len(self.eventIndex.keys()), len(self.jobIndex.keys())))
+      for job in self.userJobMatrix.keys():
+        users = self.userJobMatrix[job]
+        sumVal = 0
+        for user in users:
+          counter = 0
+          userVal = self.eventIndex[user]
+          counter +=1
+          #if user == userIndex:
+           # print self.eventPropSim[i,userVal], "checl"
+            #sumVal += 10
+          sumVal+=self.eventPropSim[i,userVal]
+        jobVal = self.jobIndex[job]
+        if sumVal > 0.0:
+          self.finalMatrix[i, jobVal] = sumVal/counter
+    print self.finalMatrix
+
+   # resFile = open("eventProp3.txt", "w")
+   # resFile.write(self.finalMatrix)
+    #resFile.close()
+    #sio.mmwrite("eventProp3", self.finalMatrix)
+    print average_precision_score(train_data_matrix, self.finalMatrix, average='macro', sample_weight=None)
+    print "mean", mean_squared_error(train_data_matrix, self.finalMatrix)
+    print('Item-based CF RMSE: ' + str(self.rmse(self.finalMatrix, train_data_matrix)))
 
 
 class ProgramEntities:
@@ -163,37 +192,34 @@ class ProgramEntities:
   for this exercise. The train and test files contain a small
   subset of the data provided in the auxillary files.
   """
-  def __init__(self):
+  def __init__(self, train_data_matrix):
     # count how many unique uesers and events are in the training file
-    uniqueUsers = set()
+    uniqueJob = set()
     uniqueEvents = set()
     eventsForUser = defaultdict(set)
     usersForEvent = defaultdict(set)
-    for filename in ["users.tsv"]:
-      f = open(filename, 'rb')
-      f.readline().strip().split("/t")
-      for line in f:
-        cols = line.strip().split("/t")
-        uniqueEvents.add(cols[0])
+    f = open("apps.tsv", 'rb')
+    f.readline()
+    for line in f:
+      cols = line.strip().split('\t')
+      uniqueEvents.add(cols[0])
+      uniqueJob.add(cols[4])
+      #print cols[0]
         #eventsForUser[cols[0]].add(cols[1])
        # usersForEvent[cols[1]].add(cols[0])
-      f.close()
+    f.close()
   #  self.userEventScores = ss.dok_matrix((len(uniqueUsers), len(uniqueEvents)))
-   # self.userIndex = dict()
+    self.userIndex = dict()
     self.eventIndex = dict()
    # for i, u in enumerate(uniqueUsers):
     #  self.userIndex[u] = i
     for i, e in enumerate(uniqueEvents):
-      self.eventIndex[i] = e
-   # ftrain = open("../Data/train.csv", 'rb')
-    #ftrain.readline()
-   # for line in ftrain:
-   #   cols = line.strip().split(",")
-   #   i = self.userIndex[cols[0]]
-   #   j = self.eventIndex[cols[1]]
-    #  self.userEventScores[i, j] = int(cols[4]) - int(cols[5])
-   # ftrain.close()
-  #  sio.mmwrite("../Models/PE_userEventScores", self.userEventScores)
+      self.eventIndex[e] = i
+    for i, e in enumerate(uniqueJob):
+      self.userIndex[e] = i
+    self.userEventScores = train_data_matrix
+       # ftrain.close()
+    sio.mmwrite("eventProp2", self.userEventScores)
     # find all unique user pairs and event pairs that we should
     # look at. These should be users who are linked via an event
     # or events that are linked via a user in either the training
@@ -207,13 +233,13 @@ class ProgramEntities:
     counter = 0
     for event in uniqueEvents:
       counter += 1
-      if counter == 20: break
+      if counter == 20000: break
       for event2 in uniqueEvents:
         if event != event2:
           events = (event, event2)
           if (event2, event) not in self.uniqueEventPairs:
             self.uniqueEventPairs.add(events)
-   # cPickle.dump(self.userIndex, open("../Models/PE_userIndex.pkl", 'wb'))
+    cPickle.dump(self.userIndex, open("dumm2.pkl", 'wb'))
     cPickle.dump(self.eventIndex, open("dumm.pkl", 'wb'))
 
 def main():
@@ -221,11 +247,59 @@ def main():
   Generate all the matrices and data structures required for further
   calculations.
   """
+  appsHeader = ['UserID', 'WindowID', 'Split', 'ApplicationDate', 'JobID']
+  apps = pd.read_csv('apps.tsv', sep='\t', names = appsHeader)
+  apps = apps[apps['WindowID'] == '1']
+  apps = apps[apps['Split'] == 'Test']
+
+  n_users = apps.UserID.unique().shape[0]
+  n_jobs = apps.JobID.unique().shape[0]
+
+  users = apps.UserID.unique()
+  jobs = apps.JobID.unique()
+  print('u list', users)
+  print('j list', jobs)
+
+  eventIndex = dict()
+  jobIndex = dict()
+  for i, e in enumerate(users):
+      eventIndex[e] = i
+  for i, e in enumerate(jobs):
+      jobIndex[e] = i
+    
+  print 'Num users: ' + str(n_users) + ' | Num Jobs = ' + str(n_jobs)
+        
+  train_data, test_data = cv.train_test_split(apps, test_size=0.25)
+
+  jobMapp = dict()
+
+  train_data_matrix = np.zeros((n_users, n_jobs))
+  for line in train_data.itertuples():
+   # print('user id to index', np.where(users==line[1]))
+   # print('job id to index', np.where(jobs==line[5]))
+    train_data_matrix[np.where(users==line[1])[0], np.where(jobs==line[5])[0]] = 1
+    if line[5] in jobMapp.keys(): listToAdd = jobMapp[line[5]]
+    else: listToAdd = []
+    listToAdd.append(line[1])
+    jobMapp[line[5]] = listToAdd
+  print('done with train matrix')
+  counter = 0
+  for key in jobMapp.keys():
+    if len(jobMapp[key]) > 2: 
+      counter+=1
+  print counter
+
   print "calculating program entities..."
-  pe = ProgramEntities()
+  #pe = ProgramEntities(train_data_matrix)
   print "calculating event metrics..."
-  Events(pe)
-  print "calculating event popularity metrics..."
+  event = Events(eventIndex, users)
+  userSim = event.getVal()
+
+  reWrite = DataRewriter(userSim, jobMapp, jobIndex, eventIndex)
+  
+  reWrite.eventReco(n_users, train_data_matrix)
+    
+
 
 if __name__ == "__main__":
   main()
